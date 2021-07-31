@@ -13,9 +13,8 @@ Computer codes associated with the manuscript.
 FASTQ files have been deposited in GEO under accession codes GSE178546. 
 
 ### scRNA-seq
-E10.5-E17.5 (Carter et al) (http://cotneyweb.cam.uchc.edu/E10_E17_shinyCell/) 
-
-E10.5-E13.5 (Carter et al) (http://cotneyweb.cam.uchc.edu/E10_E13_shinyCell/)
+[E10.5-E17.5 (Carter et al) ](http://cotneyweb.cam.uchc.edu/E10_E17_shinyCell/).
+[E10.5-E13.5 (Carter et al) ](http://cotneyweb.cam.uchc.edu/E10_E13_shinyCell/).
 
 ### Putative CREs
 Putative CREs across cell types can be inspected as custom UCSC genome browser tracks at: https://genome.ucsc.edu/s/nkfarah/snATAC_cerebellum_E12_14. 

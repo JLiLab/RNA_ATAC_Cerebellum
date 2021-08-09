@@ -18,7 +18,7 @@ FASTQ files have been deposited in GEO under accession codes GSE178546.
 [E12.5 (in-house) ](http://cotneyweb.cam.uchc.edu/E12.5_shinyCell/); 
 
 ### Putative CREs
-Putative CREs across cell types can be inspected as custom UCSC genome browser tracks at: https://genome.ucsc.edu/cgi-bin/hgTracks?db=mm10&lastVirtModeType=default&lastVirtModeExtraState=&virtModeType=default&virtMode=0&nonVirtPosition=&position=chr19%3A44639167%2D44771728&hgsid=1136985343_a9uK685ZbZAxBfetkFzmAh4S2koA.
+Putative CREs across cell types can be inspected as custom UCSC genome browser tracks at: RNA_ATAC_Cerebellum4​.
 
 
 

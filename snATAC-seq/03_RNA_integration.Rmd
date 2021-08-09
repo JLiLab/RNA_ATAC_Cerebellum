@@ -1,0 +1,140 @@
+---
+title: "03_Intergation betweeh RNA and ATAC"
+output: html_notebook
+---
+
+```{r message=F}
+library(ArchR);library(cowplot);library(Seurat)
+set.seed(123)
+addArchRThreads(threads = 20)
+```
+
+#Load scRNA-seq data
+```{r}
+cdS <- readRDS("E12_14/RNA/data/Seurat_mnn.rds")
+
+seRNA <- as.SingleCellExperiment(cdS)
+table(colData(seRNA)$cellType1)
+```
+
+```{r}
+p1 <- plotEmbedding(ArchRProj = proj, colorBy = "cellColData", name = "cellType", embedding = "UMAP")
+```
+
+# Perform constrained integration
+```{r}
+group <- c("CN.gaba")
+clustNon_group <- setdiff(unique(proj$cellType),group)
+
+rna_group <- colnames(seRNA)[colData(seRNA)$cellType %in% c("CN.gaba")]
+rnaNon_group <- setdiff(colnames(seRNA),rna_group)
+
+groupList <- SimpleList(
+  Group = SimpleList(
+    ATAC = proj$cellNames[proj$cellType %in% group],
+    RNA = rna_group
+  ),
+  Non_Group = SimpleList(
+    ATAC = proj$cellNames[proj$cellType %in% clustNon_group],
+    RNA = rnaNon_group
+  )    
+)
+```
+
+# Generate gene integrated expression matrix
+```{r}
+proj <- addGeneIntegrationMatrix(
+  ArchRProj = proj, 
+  useMatrix = "GeneScoreMatrix",
+  matrixName = "GeneIntegrationMatrix",
+  reducedDims = "IterativeLSI",
+  seRNA = seRNA,
+  addToArrow = TRUE,
+  force= TRUE,
+  groupList = groupList,
+  groupRNA = "cellType1",
+  nameCell = "predictedCell",
+  nameGroup = "predictedGroup",
+  nameScore = "predictedScore"
+)
+```
+
+# Save the ArchRProject
+```{r}
+saveArchRProject(
+  ArchRProj = proj,
+  outputDirectory = "E12_14",
+  overwrite = TRUE,
+  load = FALSE
+)
+```
+
+# Compare gene score and integrated expression matrices
+## Find markers with gene score matrix
+```{r}
+markersGSM <- getMarkerFeatures(
+  ArchRProj = proj, 
+  useMatrix = "GeneScoreMatrix", 
+  groupBy = "cellType1",
+  bias = c("TSSEnrichment", "log10(nFrags)"),
+  testMethod = "wilcoxon"
+)
+# saveRDS(markersGSM, "E12_14/results/markersGSM_cellType1.rds")
+
+markersGSM1 <- markersGSM[,!colnames(markersGSM) %in% c("X1")]
+
+markerList <- getMarkers(markersGSM1, cutOff = "FDR <= 0.01 & Log2FC >= 1.25")
+sig_genes <- data.frame(unlist(markerList))
+sig_genes$cluster <- rownames(sig_genes)
+# openxlsx::write.xlsx(sig_genes, "E12_14/results/marker_GSM_cellType1.xlsx")
+
+# generate heatmap
+markersGSM1 <- markersGSM[,!colnames(markersGSM) %in% c("X1")]
+
+markerGenes  <- c(
+  "Tlx3", 
+  "Meis2", "Atoh1","Lhx9","Lhx2",
+  "Pax2", "Pax6", "Isl1", "Tfap2b", 
+  "Foxp1", "Foxp2", "Sox14",
+  "Ascl1","Ptf1a", "Wnt1","Id3",
+  "Hes5", "Notch1", "Nes", "Wls",
+  "Alf1","Cldn5","Kdr","Rgs5"
+)
+
+heatmapGSM <- plotMarkerHeatmap(
+  seMarker = markersGSM1, 
+  cutOff = "FDR <= 0.01 & Log2FC >= 1",
+  labelMarkers = markerGenes,
+  transpose = F
+)
+plotPDF(heatmapGSM, name = "heatmap_GSM", width = 5.5, height = 7.5, ArchRProj = proj, addDOC = FALSE)
+```
+
+## Find markers with geneIntegrationMatix
+```{r}
+markersGIM <- getMarkerFeatures(
+  ArchRProj = proj, 
+  useMatrix = "GeneIntegrationMatrix", 
+  groupBy = "cellType1",
+  bias = c("TSSEnrichment", "log10(nFrags)"),
+  testMethod = "wilcoxon"
+)
+# saveRDS(markersGIM, "E12_14/results/markersGIM_cellType1.rds")
+
+markerList <- getMarkers(markersGIM, cutOff = "FDR <= 0.01 & Log2FC >= 1.25")
+sig_genes <- data.frame(unlist(markerList))
+sig_genes$cluster <- rownames(sig_genes)
+# openxlsx::write.xlsx(sig_genes, "E12_14/results/marker_GIM_cellType1.xlsx")
+
+# Remove low quality cells
+markersGIM1 <- markersGIM[,!colnames(markersGIM) %in% c("X1")]
+
+heatmapGIM <- plotMarkerHeatmap(
+  seMarker = markersGIM1, 
+  cutOff = "FDR <= 0.01 & Log2FC >= 1",
+  labelMarkers = markerGenes,
+  transpose = F
+)
+plotPDF(heatmapGIM, name = "heatmap_GIM", width = 5.5, height = 7.5, ArchRProj = proj, addDOC = FALSE)
+```
+

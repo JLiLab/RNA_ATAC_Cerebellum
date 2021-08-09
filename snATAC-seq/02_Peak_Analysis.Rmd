@@ -1,0 +1,133 @@
+---
+title: "02_Identify and characterize marker peaks"
+output: html_notebook
+---
+
+
+```{r}
+library(ArchR);library(cowplot);library(Seurat)
+set.seed(123)
+addArchRThreads(threads = 20)
+proj <- loadArchRProject(path = "E12_14")
+```
+
+# Find differential accessibility peaks among different cell types and states
+```{r}
+markersPeaks <- getMarkerFeatures(
+  ArchRProj = proj,
+  useMatrix = "PeakMatrix",
+  groupBy = "cellType1",
+  bias = c("TSSEnrichment", "log10(nFrags)"),
+  testMethod = "wilcoxon"
+)
+
+saveRDS(markersPeaks, "E12_14/results/markersPeaks_cellType1.rds")
+# # reload object
+# markersPeaks <- readRDS("E12_14/results/markersPeaks_cellType1.rds")
+```
+
+# Generate heatmaps of DA peaks
+```{r}
+heatmapPeaks <- plotMarkerHeatmap(
+  seMarker = markersPeaks, 
+  cutOff = "FDR <= 0.01 & Log2FC >= 1",
+  nLabel = 1,
+  labelRows = F,
+  transpose = F
+)
+plotPDF(heatmapPeaks, name = "Peak-Marker-Heatmap_cellType1", width = 8, height = 6, ArchRProj = proj, addDOC = FALSE)
+
+# Filter non-cerebellar or non-neural cell types
+markersPeaks1 <- markersPeaks[,!colnames(markersPeaks) %in% c("Mes","X1","Microglia","Pericyte","VECA")]
+
+heatmapPeaks <- plotMarkerHeatmap(
+  seMarker = markersPeaks1, 
+  cutOff = "FDR <= 0.01 & Log2FC >= 1",
+  nLabel = 1,
+  labelRows = F,
+  transpose = F
+)
+plotPDF(heatmapPeaks, name = "Peak-Marker-Heatmap_cellType1a", width = 7, height = 6, ArchRProj = proj, addDOC = FALSE)
+```
+
+# Perform TF binding motif enrichment of marker peaks
+```{r}
+proj <- addMotifAnnotations(ArchRProj = proj, motifSet = "cisbp", name = "Motif")
+
+enrichMotifs <- peakAnnoEnrichment(
+  seMarker = markersPeaks,
+  ArchRProj = proj,
+  peakAnnotation = "Motif",
+  cutOff = "FDR <= 0.01 & Log2FC >= 1"
+)
+enrichMotifs
+
+heatmapEM <- plotEnrichHeatmap(enrichMotifs, n = 10, transpose = F, cutOff = 10)
+plotPDF(heatmapEM, name = "Motifs-Heatmap_cellType1", width = 6, height = 15, ArchRProj = proj, addDOC = FALSE)
+
+enrichMotifs <- peakAnnoEnrichment(
+  seMarker = markersPeaks1,
+  ArchRProj = proj,
+  peakAnnotation = "Motif",
+  cutOff = "FDR <= 0.01 & Log2FC >= 1"
+)
+enrichMotifs
+
+heatmapEM <- plotEnrichHeatmap(enrichMotifs, n = 10, transpose = F, cutOff = 10)
+plotPDF(heatmapEM, name = "Motifs-Heatmap_cellType1_selected", width = 6, height = 15, ArchRProj = proj, addDOC = FALSE)
+```
+
+# Perform feature enrichment of marker peaks
+```{r}
+# Obtain downloaded signature bed files
+path_to_signatures <- '/Volumes/jali/Genomics/snATACseq/ArchR/forSignature/'
+fileNames <- paste(path_to_signatures, list.files(path_to_signatures), sep='')
+labels  <- c("ASCL1","ATOH1","Cb_8W_DHS",'Cb_P0_DNaseHS','Cb_P7_DNaseHS','Cb_P7_H3K27ac','P7_Zic_ChIP',"PTF1A","VISTA_Cb")
+
+signatures <- readBed(fileNames[1])
+signatures$name <- labels[1]
+
+for (i in 2:length(fileNames)) {
+  file <- fileNames[i]
+  temp <- readBed(file)
+  temp$name <- labels[i]
+  signatures <- append(signatures, temp)
+}
+
+# download cerebellar CREs
+gr <- readRDS("/Volumes/jali/Genomics/snATACseq/ArchR/cerebellum_ATAC.rds")
+signatures[,2]
+names(signatures)
+
+# combine the object and generate a signature lists
+signatures <- c(gr, signatures[,2])
+signatures.list=GenomicRanges::split(signatures, signatures$name,drop=TRUE)
+
+# add signature to the ArchR obejct
+proj <- addPeakAnnotations(ArchRProj = proj, regions = signatures.list, name = "Signature1", force = TRUE)
+```
+
+## Test enrichment for signature.list
+```{r}
+enrichRegions <- peakAnnoEnrichment(
+  seMarker = markersPeaks1,
+  ArchRProj = proj,
+  peakAnnotation = "Signature1",
+  cutOff = "FDR <= 0.01 & Log2FC >= 1"
+)
+
+heatmapRegions <- plotEnrichHeatmap(enrichRegions, cutOff = 5,transpose = F)
+plotPDF(heatmapRegions, name = "Signature_Enrichment", width = 6.5, height = 7, ArchRProj = proj, addDOC = FALSE)
+```
+
+# Save the ArchRProject
+```{r}
+saveArchRProject(
+  ArchRProj = proj,
+  outputDirectory = "E12_14",
+  overwrite = TRUE,
+  load = FALSE
+)
+```
+
+

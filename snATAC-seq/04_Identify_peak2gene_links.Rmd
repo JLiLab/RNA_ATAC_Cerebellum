@@ -1,0 +1,125 @@
+---
+title: "04. Generate peak-to-gene links"
+output: html_notebook
+---
+
+# Identify putative cis-regulatory elements of the embryonic mouse cerebellum
+Here, we used the ArchR addPeak2GeneLinks function to identify peak-to-gene links with the default settings except for changing the maximal distance between the peak and gene to 500 kb. We reasoned that some peak-to-gene links might be specific to each embryonic stage. Therefore, we subset the data according to stage, and iterated the analysis and identified additional peak-to-gene links that were specific to each stage.
+
+```{r message=F}
+library(ArchR);library(cowplot);library(Seurat);library(Signac)
+set.seed(123)
+addArchRThreads(threads = 20)
+proj <- loadArchRProject(path = "E12_14")
+```
+
+# Split data according to stages
+```{r}
+# subseting E12.5 data
+idxSample <- BiocGenerics::which(proj$Sample %in% "E12")
+cellsSample <- proj$cellNames[idxSample]
+
+proj.12 <- subsetArchRProject(
+  ArchRProj = proj,
+  cells = cellsSample,
+  outputDirectory = "E12_subset",
+  dropCells = TRUE,
+  logFile = NULL,
+  threads = getArchRThreads()
+)
+  
+p12 <- plotEmbedding(ArchRProj = proj.12, colorBy = "cellColData", name = "cellType", embedding = "UMAP")
+plotPDF(p12, name = "E12_subset.pdf", ArchRProj = proj, addDOC = FALSE, width = 5, height = 5)
+
+# subseting E13.5 data
+idxSample <- BiocGenerics::which(proj$Sample %in% "E13")
+cellsSample <- proj$cellNames[idxSample]
+proj.13 <- subsetArchRProject(
+  ArchRProj = proj,
+  cells = cellsSample,
+  outputDirectory = "E13_subset",
+  dropCells = TRUE,
+  logFile = NULL,
+  threads = getArchRThreads()
+)
+
+p13 <- plotEmbedding(ArchRProj = proj.13, colorBy = "cellColData", name = "cellType", embedding = "UMAP")
+plotPDF(p13, name = "E13_subset.pdf", ArchRProj = proj, addDOC = FALSE, width = 5, height = 5)
+
+# subseting E14.5 data
+idxSample <- BiocGenerics::which(proj$Sample %in% "E14")
+cellsSample <- proj$cellNames[idxSample]
+proj.14 <- subsetArchRProject(
+  ArchRProj = proj,
+  cells = cellsSample,
+  outputDirectory = "E14_subset",
+  dropCells = TRUE,
+  logFile = NULL,
+  threads = getArchRThreads()
+)
+
+p14 <- plotEmbedding(ArchRProj = proj.14, colorBy = "cellColData", name = "cellType", embedding = "UMAP")
+plotPDF(p14, name = "E14_subset.pdf", ArchRProj = proj, addDOC = FALSE, width = 5, height = 5)
+
+pdf("E12_14/Plots/All_subsets1.pdf", h =5, w =15)
+cowplot::plot_grid(p12,p13,p14,ncol = 3)
+dev.off()
+```
+
+# Generate peak-to-gene links in each dataset
+```{r}
+list = c("E12_14","E12_subset","E13_subset","E14_subset")
+
+geneSet <- readRDS("geneSet.rds")
+for (ArchR_proj in list){
+  proj <- loadArchRProject(path = ArchR_proj)
+  
+  # Identify peak-to-gene links 
+  proj <- addPeak2GeneLinks(
+    ArchRProj = proj,
+    reducedDims = "IterativeLSI",
+    useMatrix = "GeneIntegrationMatrix",
+    dimsToUse = 1:30,
+    scaleDims = NULL,
+    corCutOff = 0.75,
+    cellsToUse = NULL,
+    k = 100,
+    knnIteration = 500,
+    overlapCutoff = 0.8,
+    maxDist = 250000,
+    scaleTo = 10^4,
+    log2Norm = TRUE,
+    predictionCutoff = 0.4,
+    addEmpiricalPval = FALSE,
+    seed = 1,
+    threads = max(floor(getArchRThreads()/2), 1),
+    verbose = TRUE,
+    logFile = createLogFile("addPeak2GeneLinks")
+  )
+  
+  p2g <- getPeak2GeneLinks(
+    ArchRProj = proj,
+    corCutOff = 0.45,
+    resolution = 1,
+    returnLoops = FALSE
+  )
+  
+  p2g.peaks <- proj@peakSet[p2g$idxATAC,]
+  p2g.peaks$peaks <- GRangesToString(grange = p2g.peaks, sep = c(":", "-"))
+  p2g.peaks$linkedGene <- geneSet$name[p2g$idxRNA]
+  p2g.peaks$Correlation <- p2g$Correlation
+  p2g.peaks$FDR <- p2g$FDR
+  p2g.peaks$VarQATAC <- p2g$VarQATAC
+  p2g.peaks$VarQRNA <- p2g$VarQRNA
+  p2g.peaks
+  
+  p2g.db <- data.frame(p2g.peaks)
+  p2g.db$nearest_TSS <- geneSet$start[match(p2g.db$nearestGene, geneSet$name)]
+  p2g.db$linked_TSS <- geneSet$start[match(p2g.db$linkedGene, geneSet$name)]
+  p2g.db <- dplyr::mutate(p2g.db,distToTSS_near = abs(nearest_TSS-abs(start+end)/2),
+                   distToTSS_linked = abs(linked_TSS-abs(start+end)/2))
+
+  saveRDS(p2g.db, paste0(ArchR_proj,"/results/peak2gene.rds"))
+}
+```
+

@@ -1,0 +1,593 @@
+---
+title: "04a: Characterization of putative CREs"
+output: html_notebook
+---
+
+Here, we examined the putative CREs based on the peak-to-gene links identified previously.
+
+```{r message=F}
+library(ArchR);library(Signac);library(tidyverse)
+library(ChIPseeker);library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+txdb <- TxDb.Mmusculus.UCSC.mm10.knownGene
+library(genomation); library(Vennerable)
+threadNum = 5
+```
+
+# Load saved objects
+Load saved peak2gene links object from each iteration and combined them together
+```{r}
+list.obj <- c("E12_14","E12_subset","E13_subset","E14_subset")
+
+ArchR_proj <- list.obj[1]
+p2g.peaks <- readRDS(paste0(ArchR_proj,"/results/peak2gene.rds"))
+p2g.peaks$stage <- ArchR_proj
+
+for (ArchR_proj in list.obj[2:4]){
+  temp <- readRDS(paste0(ArchR_proj,"/results/peak2gene.rds"))
+  temp$stage <- ArchR_proj
+  p2g.peaks <- rbind(p2g.peaks, temp)
+}
+table(p2g.peaks$stage)
+```
+
+# Find all unique peaks2gene links
+We sorted peak2gene pairs according to Correlation and removed duplicated peak2gene pairs with lower Correlation values. All together, we identified 197,299 peak-to-gene pairs.
+```{r}
+p2g.peaks <- p2g.peaks[order(p2g.peaks$Correlation, decreasing = T),]
+p2g.peaks1 <- p2g.peaks[!duplicated(p2g.peaks$pair),]
+table(p2g.peaks1$stage);nrow(p2g.peaks1)
+```
+Find reproduced and unique peak2gene pairs from each iteration
+```{r}
+df <- p2g.peaks %>% group_by(pair) %>% mutate(count=n())
+table(df$stage,df$count)
+```
+
+# peak-to-gene links that are unique to each dataset
+```{r}
+table(df$stage[df$count==1])
+```
+
+Calculate the percentage of peak2gene links that are unique to individual datasets and those common to all datasets
+```{r}
+nrow(df[df$count==1,])/nrow(p2g.peaks1)*100
+nrow(df[df$count==4,])/nrow(p2g.peaks1)*100
+```
+
+
+# get ArchR annotation
+```{r}
+proj=loadArchRProject(ArchR_proj)
+ann <- data.frame(getGeneAnnotation(proj)$genes)
+ann=ann[!duplicated(ann$symbol),]
+ann$TSS1=ann$start+1
+ann$TSS1[ann$strand=="-"]=ann$start[ann$strand=="-"]-1
+```
+
+# Calculate the Distance from each CRE to the TSS of its linked target
+Here, we used the ArchR annotation to get the TSS of the linked target.
+```{r}
+p2g.peaks1$linked_TSS=ann$start[match(p2g.peaks1$linkedGene, ann$symbol)]
+p2g.peaks1$linked_TSS1=ann$TSS1[match(p2g.peaks1$linkedGene, ann$symbol)]
+p2g.peaks1$nearest_TSS1=ann$TSS1[match(p2g.peaks1$nearestGene, ann$symbol)]
+p2g.peaks1$strand=ann$strand[match(p2g.peaks1$linkedGene, ann$symbol)]
+```
+
+
+# Calculate the distance bettween the midpoint of a CRE and the TSS of linked gene
+```{r}
+p2g.peaks1 <- p2g.peaks1 %>%
+  mutate(distToTSS_near1 = abs(nearest_TSS1-abs(start+end)/2),
+                 distToTSS_linked = abs(linked_TSS-abs(start+end)/2))
+```
+
+
+# Filter CREs
+We set different correlation cut off
+```{r}
+p2g.peaks2 <- p2g.peaks1 %>% filter(Correlation >= 0.65)
+table(p2g.peaks2$stage);
+```
+
+
+# The total number of peak2gene links, total number of CREs, and targets
+```{r}
+nrow(p2g.peaks2)
+length(unique(p2g.peaks2$peaks))
+length(unique(p2g.peaks2$linkedGene))
+```
+
+Calculate the percentage of peak2gene links (after filtering) that are unique to individual datasets and those common to all datasets
+```{r}
+df1 <- p2g.peaks %>% filter(Correlation >= 0.65) %>% group_by(pair) %>% mutate(count=n())
+table(df$stage,df$count)
+
+nrow(df1[df1$count==1,])/nrow(p2g.peaks2)*100
+nrow(df1[df1$count==4,])/nrow(p2g.peaks2)*100
+```
+
+# Determine the significant overlapping between CREs and those identified by ENCODE and F5 
+```{r}
+CRE <- StringToGRanges(unique(p2g.peaks2$peaks), sep = c("_","_")) 
+```
+
+```{r}
+dCRE <- readBed("/Volumes/jali/Genomics/Annotation/ENCODE_dCRE.bed")
+pCRE <- readBed("/Volumes/jali/Genomics/Annotation/ENCODE_pCRE.bed")
+F5 <- readBed("/Volumes/jali/Genomics/Annotation/F5.mm10.enhancers.bed")
+```
+
+```{r}
+pdf("E12_14/Plots/Venn_coverlapping_CRE_filtered.pdf")
+res <- ChIPpeakAnno::makeVennDiagram(Peaks=list(CRE,dCRE,pCRE,F5),
+                       NameOfPeaks=c("CRE", "dCRE", "pCRE","FANTOM5"), 
+                       totalTest = 5e+7, TxDb=txdb)
+dev.off()
+```
+
+As indicated the test results, the overlapping with the ENCOD CREs is highly significant
+```{r}
+res$p.value
+```
+
+# Examine the characteristics of putative CREs
+## Calculate the median distance of CREs to the nearest gene or to the linked gene
+```{r}
+# Examine the characteristics of putative CREs
+df <- p2g.peaks2 %>% 
+  dplyr::select(peaks, linkedGene, peakType, distToTSS, distToTSS_linked) %>% 
+  rename(Nearest = distToTSS, Linked = distToTSS_linked ) %>% 
+  gather(group, distance, Nearest:Linked)
+
+# calculate the median distance of CREs to the nearest gene or to the linked gene
+summary <- df %>% group_by(group) %>% 
+  summarise(median = median(distance, na.rm = T))
+summary
+```
+
+## find the median number of peaks/CREs per linked gene
+```{r}
+summary2 <- group_by(p2g.peaks2, linkedGene) %>% 
+  summarise(distance = median(distToTSS), number = n())
+median(summary2$number)
+```
+
+# Find the median number of gene linked to each CRE
+```{r}
+summary3 <- group_by(p2g.peaks2, peaks) %>% 
+  summarise(distance = median(distToTSS), number = n())
+median(summary3$number)
+```
+
+
+## Calculate the percentage of the CREs that are linked to a single gene and the maximum number of targets from a CRE
+```{r}
+nrow(filter(summary3, number==1))/nrow(summary3)*100
+max(summary3$number)
+```
+
+
+```{r}
+library(cowplot)
+p1 <- ggplot(df, aes(x=distance, color = group, fill = group)) +
+  geom_histogram(alpha=0.4, position="identity", binwidth = 5000)+
+  xlim(0,500000)+ylim(0,7000)+
+  geom_vline(data=summary, aes(xintercept=median, color=group),
+             linetype="dashed")+theme_cowplot(12)+
+  theme(legend.position="top")
+
+p2 <- ggplot(summary2, aes(y = number))+
+  geom_boxplot(fill='indianred1', color="black")+
+  theme_cowplot(12)+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+p3 <- ggplot(summary3, aes(y = number))+
+  geom_boxplot(fill='cyan', color="black")+
+  theme_cowplot(12)+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+# pdf("E12_14/results/NMF_all/CRE_all_info.pdf", w =6, h =5)
+print(cowplot::plot_grid(p1,p2,p3, ncol = 3, rel_widths = c(3.0,1.06,1)))
+# dev.off()
+```
+```{r}
+# pdf("E12_14/Plots/CRE_filtered_info.pdf", w =7, h =3)
+# print(cowplot::plot_grid(p1,p2,p3, ncol = 3, rel_widths = c(3.0,1.06,1)))
+# dev.off()
+```
+
+
+# Annotate all peaks and cCREs
+It appears that cCRES are actually more enriched for promoter regions comparing to all peaks.
+```{r}
+all.peaks <- GRangesToString(grange = proj@peakSet, sep = c(":", "-"))
+```
+
+```{r}
+GR_cCRE=StringToGRanges(unique(p2g.peaks2$peaks), sep=c("_","_"))
+peakList=list(all.peaks = StringToGRanges(all.peaks, sep = c(":","-")), cCREs = GR_cCRE)
+
+peakAnnoList <- lapply(peakList, annotatePeak, TxDb=txdb,
+                       tssRegion=c(-3000, 3000), verbose=FALSE)
+
+p1 <- plotAnnoBar(peakAnnoList)
+p1+theme(legend.position = "top")
+```
+
+```{r}
+plotAnnoPie(peakAnnoList$cCREs)
+```
+
+```{r}
+# pdf("E12_14/Plots/cCRE_filtered_features.pdf")
+# plotAnnoPie(peakAnnoList$cCREs)
+# dev.off()
+```
+
+
+Select genes (1,340) of the top 10 percentile with the most CREs
+```{r}
+tab.top=p2g.peaks2 %>% group_by(linkedGene) %>% summarise(count=n()) %>% arrange(desc(count)) %>% 
+  filter(quantile(count, 0.9)<count)
+min(tab.top$count)
+```
+
+
+```{r}
+mGenes <- readRDS(file="/Volumes/jali/Genome/Annotation1.rds")
+tab.top$TF <- mGenes$Type[match(tab.top$linkedGene,mGenes$mgi_symbol)]
+tab.top$Name <- mGenes$description[match(tab.top$linkedGene,mGenes$mgi_symbol)]
+write.csv(tab.top, "E12_14/results/topGenes_CRE.csv")
+```
+
+
+Select genes (1,541) with only one CRE
+```{r}
+tab1=p2g.peaks2 %>% group_by(linkedGene) %>% summarise(count=n()) %>% arrange(desc(count)) %>% 
+  filter(count == 1)
+median(tab1$count)
+dim(tab1)
+```
+
+# Functional enrichment analysis
+As we can see here, the top 10 percitile of genes with the highest numbers CREs significantly enriched for TFs and patterning.
+```{r message=F}
+library(clusterProfiler);library(org.Mm.eg.db)
+ego_top_BP <- enrichGO(gene   = tab.top$linkedGene,
+                OrgDb         = org.Mm.eg.db,
+                keyType = "SYMBOL",
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+
+ego_top_MF <- enrichGO(gene   = tab.top$linkedGene,
+                OrgDb         = org.Mm.eg.db,
+                keyType = "SYMBOL",
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+
+ego1_BP <- enrichGO(gene          = tab1$linkedGene,
+                 OrgDb         = org.Mm.eg.db,
+                 keyType = "SYMBOL",
+                 ont           = "BP",
+                 pAdjustMethod = "BH",
+                 pvalueCutoff  = 0.01,
+                 qvalueCutoff  = 0.05)
+
+ego1_MF <- enrichGO(gene          = tab1$linkedGene,
+                 OrgDb         = org.Mm.eg.db,
+                 keyType = "SYMBOL",
+                 ont           = "MF",
+                 pAdjustMethod = "BH",
+                 pvalueCutoff  = 0.01,
+                 qvalueCutoff  = 0.05)
+dim(ego_top_BP);dim(ego_top_MF);dim(ego1_BP);dim(ego1_MF)
+```
+
+```{r}
+p1=barplot(ego_top_BP, showCategory=5)
+p2=barplot(ego_top_MF, showCategory=4)
+cowplot::plot_grid(p1,p2,ncol = 1)
+```
+
+```{r}
+write_csv(ego_top_BP@result, "E12_14/results/GO_BP.csv")
+write_csv(ego_top_MF@result, "E12_14/results/GO_MF.csv")
+
+# pdf("E12_14/Plots/CRE_function.pdf", w=10, h=2)
+# p1
+# p2
+# dev.off()
+```
+
+# output for bigInteract track
+```{r}
+interact = data.frame(chrom = p2g.peaks1$seqnames,
+                      chromStart = p2g.peaks1$start,
+                      chromEnd = p2g.peaks1$end,
+                      name = p2g.peaks1$pair,
+                      score = as.integer(p2g.peaks1$Correlation*1000),
+                      value = p2g.peaks1$score,
+                      exp = "all.CREs",
+                      color = "#7A67EE",
+                      sourceChrom = p2g.peaks1$seqnames,
+                      sourceStart = p2g.peaks1$start,
+                      sourceEnd = p2g.peaks1$end,
+                      sourceName = ".",
+                      sourceStrand = p2g.peaks1$strand,
+                      targetChrom = p2g.peaks1$seqnames,
+                      targetStart = p2g.peaks1$linked_TSS, 
+                      targetEnd = p2g.peaks1$linked_TSS1,
+                      targetName =p2g.peaks1$linkedGene, 
+                      targetStrand = p2g.peaks1$strand)
+interact=interact %>% group_by(chrom, name) %>% 
+  mutate(chromStart=as.integer(min(sourceStart,sourceEnd,targetStart,targetEnd)),
+                             chromEnd=as.integer(max(sourceStart,sourceEnd,targetStart,targetEnd)))
+interact$name="."
+head(interact)
+```
+
+```{r}
+interact1 <- interact %>%  mutate(peak= paste(sourceChrom, sourceStart,sourceEnd, sep = "-"))
+```
+
+#Annotate cell-type-specific CREs
+```{r}
+markersPeaks=readRDS("E12_14/results/markersPeaks_cellGroup.rds")
+```
+
+```{r}
+markersPeaks1 <- markersPeaks[,!colnames(markersPeaks) %in% c("Mes","LQC","NNC")]
+daPeakList <- getMarkers(markersPeaks1, cutOff = "FDR <= 0.01 & Log2FC >= 1",returnGR = T)
+```
+
+```{r}
+da1=unlist(as(daPeakList, "GRangesList"))
+```
+
+```{r}
+daPeakList <- getMarkers(markersPeaks1, cutOff = "FDR <= 0.01 & Log2FC >= 1")
+da <- daPeakList[[1]]
+da$cellType <- names(daPeakList)[1]
+for (i in 2:length(names(daPeakList))){
+  res <- daPeakList[[i]]
+  if(nrow(res) > 0){
+    res$cellType <- names(daPeakList)[i]
+    da <- rbind(da,res)
+  }
+}
+```
+
+
+```{r}
+df <- data.frame(peak=GRangesToString(da1), Log2FC = da1$FDR, cellGroup=da$cellType);dim(df)
+```
+
+```{r}
+df1 <- df %>% arrange(Log2FC, desc()) %>% filter (! duplicated(peak));dim(df1)
+```
+
+
+
+```{r}
+peak.id <- intersect(interact1$peak, df1$peak);length(peak.id)
+
+x <- interact1[interact1$peak %in% peak.id,]
+interact1$exp[interact1$peak %in% peak.id] <- df1$cellGroup[match(x$peak,df1$peak)]
+```
+
+
+```{r}
+interact1=interact1[,-19]
+```
+
+```{r}
+table(interact1$exp)
+```
+
+
+
+```{r}
+write.table(interact1, "E12_14/results/peak2genes.interact", sep="\t", quote=F,row.names = F)
+```
+
+```{r}
+interact2=dplyr::filter(interact1, score >650 & ! duplicated(peak));dim(interact2)
+```
+
+# Inspect the validated enhancers by mouse transgenic assays
+# compile the validated enhancers
+```{r}
+CRE.validated <- c("chr6:64733356-64733916","chr6:64734330-64734872","chr8:3625005-3625848","chr2:19430090-19432387","chr7:30456841-30460309",
+         "chr15:98798303-98798460",
+         "chr15:98793944-98799417",
+         "chr19:44752073-44752553","chr19:44752864-44752983","chr19:44753509-44753891",
+         "chr5:28475594-28477691","chr5:28458336-28460073","chr5:28459072-28460623","chr5:28874916-28877113","chr5:28892077-28893671","chr5:28784738-28786840", # Shh
+         "chr11:84585440-84586399", # Lhx1
+         "chr19:45615321-45617620") # Fgf8
+
+CRE.validated <- StringToGRanges(CRE.validated, sep = c(":","-"))
+CRE.validated$name <- c("Atoh1_A","Atoh1_B","L7_promoter","Ptf1a","Kirrel2","Wnt1","Wnt1_5k","Pax2D","Pax2I","Pax2P",
+              "Shh_SFPE1","Shh_SFPE2","Shh_SBE1","Shh_SBE2","Shh_SBE3","Shh_SBE4",
+              "Lhx1", 
+              "Fgf8_CE64")
+```
+
+Generate feature tracks and cell types to show
+```{r}
+CRE <- StringToGRanges(unique(p2g.peaks2$peaks), sep = c("_","_")) 
+ENCODE <- c(dCRE, pCRE)
+features <- GRangesList(CREs= CRE,ENCODE = ENCODE, Validated = CRE.validated)
+
+# Select cell types to show
+useGroups <- c("NPCa","NPC","PTZ","GCP","GC","CN.gaba","GABA.Pro","GABA.Pre","IN","PC.Nrgn","PC.En1","PC.Etv1","PC.Foxp1")
+```
+
+```{r}
+ArchR_proj = "E12_14"
+addArchRThreads(threadNum) 
+proj <- loadArchRProject(path = ArchR_proj)
+```
+
+
+```{r, include=FALSE}
+p <- plotBrowserTrack(
+  ArchRProj = proj, 
+  groupBy = "cellType1",
+  useGroups = useGroups,
+  features = features,
+  plotSummary = c("bulkTrack", "featureTrack", "loopTrack", "geneTrack"),
+  sizes = c(12, 2.5, 2, 1),
+  geneSymbol = "Atoh1", 
+  upstream = 3000,
+  downstream = 7000,
+  loops = getPeak2GeneLinks(proj)
+)
+
+plotPDF(plotList = p, 
+        name = "CRE_validation/Atoh1.pdf", 
+        ArchRProj = proj, 
+        addDOC = FALSE, width = 8, height = 5)
+
+p <- plotBrowserTrack(
+  ArchRProj = proj, 
+  groupBy = "cellType1",
+  useGroups = useGroups,
+  features = features,
+  plotSummary = c("bulkTrack", "featureTrack", "loopTrack", "geneTrack"),
+  sizes = c(12, 2.5, 2, 1),
+  geneSymbol = "Pcp2", 
+  upstream = 5000,
+  downstream = 1000,
+  loops = getPeak2GeneLinks(proj)
+)
+
+plotPDF(plotList = p, 
+        name = "CRE_validation/Pcp2.pdf", 
+        ArchRProj = proj, 
+        addDOC = FALSE, width = 8, height = 5)
+
+p1 <- plotBrowserTrack(
+  ArchRProj = proj, 
+  groupBy = "cellType1",
+  useGroups = useGroups,
+  features = features,
+  plotSummary = c("bulkTrack", "featureTrack", "loopTrack", "geneTrack"),
+  sizes = c(12, 2.5, 2, 1),
+  geneSymbol = "Ptf1a", 
+  upstream = 20000,
+  downstream = 10000,
+  loops = getPeak2GeneLinks(proj)
+)
+
+plotPDF(plotList = p1, 
+        name = "CRE_validation/Ptf1a.pdf", 
+        ArchRProj = proj, 
+        addDOC = FALSE, width = 8, height = 5)
+
+p <- plotBrowserTrack(
+  ArchRProj = proj, 
+  groupBy = "cellType1",
+  useGroups = useGroups,
+  features = features,
+  plotSummary = c("bulkTrack", "featureTrack", "loopTrack", "geneTrack"),
+  sizes = c(12, 2.5, 2, 1),
+  geneSymbol = "Kirrel2", 
+  upstream = 8500,
+  downstream = 3000,
+  loops = getPeak2GeneLinks(proj)
+)
+
+plotPDF(plotList = p, 
+        name = "CRE_validation/Kirrel2.pdf", 
+        ArchRProj = proj, 
+        addDOC = FALSE, width = 8, height = 5)
+
+p <- plotBrowserTrack(
+  ArchRProj = proj, 
+  groupBy = "cellType1",
+  useGroups = useGroups,
+  features = features,
+  plotSummary = c("bulkTrack", "featureTrack", "loopTrack", "geneTrack"),
+  sizes = c(12, 2.5, 2, 1),
+  geneSymbol = "Wnt1", 
+  upstream = 2500,
+  downstream = 11000,
+  loops = getPeak2GeneLinks(proj)
+)
+
+plotPDF(plotList = p, 
+        name = "CRE_validation/Wnt1.pdf", 
+        ArchRProj = proj, 
+        addDOC = FALSE, width = 8, height = 5)
+
+p <- plotBrowserTrack(
+  ArchRProj = proj, 
+  groupBy = "cellType1",
+  useGroups = useGroups,
+  features = features,
+  plotSummary = c("bulkTrack", "featureTrack", "loopTrack", "geneTrack"),
+  sizes = c(12, 2.5, 2, 1),
+  geneSymbol = "Pax2", 
+  upstream = 7500,
+  downstream = 1000,
+  loops = getPeak2GeneLinks(proj)
+)
+
+grid::grid.draw(p$Pax2)
+
+plotPDF(plotList = p, 
+        name = "CRE_validation/Pax2.pdf", 
+        ArchRProj = proj, 
+        addDOC = FALSE, width = 8, height = 5)
+
+p <- plotBrowserTrack(
+  ArchRProj = proj, 
+  groupBy = "cellType1",
+  useGroups = useGroups,
+  features = features,
+  plotSummary = c("bulkTrack", "featureTrack", "loopTrack", "geneTrack"),
+  sizes = c(12, 2.5, 2, 1),
+  geneSymbol = "Lhx1", 
+  upstream = 48000,
+  downstream = 65000,
+  loops = getPeak2GeneLinks(proj)
+)
+
+grid::grid.draw(p$Lhx1)
+plotPDF(plotList = p, 
+        name = "CRE_validation/Lhx1.pdf", 
+        ArchRProj = proj, 
+        addDOC = FALSE, width = 8, height = 5)
+```
+
+Load E12.5 subset becuase the correct peak2gene link is specific to this stage. This is consistent with temporal order of Fgf8 expression, which is down-regulatetd after E12.5.
+```{r, include=FALSE}
+proj.e12=loadArchRProject("E12_subset")
+
+p <- plotBrowserTrack(
+  ArchRProj = proj, 
+  groupBy = "cellType1",
+  useGroups = useGroups,
+  features = features,
+  plotSummary = c("bulkTrack", "featureTrack", "loopTrack", "geneTrack"),
+  sizes = c(12, 2.5, 2, 1),
+  geneSymbol = "Fgf8", 
+  upstream = 150000,
+  downstream = 3000,
+  loops = getPeak2GeneLinks(proj.e12)
+)
+
+plotPDF(plotList = p, 
+        name = "CRE_validation/Fgf8.pdf", 
+        ArchRProj = proj, 
+        addDOC = FALSE, width = 8, height = 5)
+```
+
